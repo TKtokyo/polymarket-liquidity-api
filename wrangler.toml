@@ -1,4 +1,4 @@
-name = "token-intel-api"
+name = "polymarket-liquidity-api"
 main = "src/index.ts"
 compatibility_date = "2025-02-25"
 compatibility_flags = ["nodejs_compat"]
@@ -8,26 +8,25 @@ compatibility_flags = ["nodejs_compat"]
 FACILITATOR_URL = "https://www.x402.org/facilitator"
 X402_NETWORK = "eip155:84532"
 
-# KV namespace for token data cache (local dev uses simulated KV)
+# KV namespace for market liquidity cache (local dev uses simulated KV)
 [[kv_namespaces]]
-binding = "TOKEN_CACHE"
-id = "ba60c3ee30aa425db00229fa37435b85"
+binding = "MARKET_CACHE"
+id = "placeholder-create-with-wrangler-kv-namespace-create"
 
 # --- Production environment: Base mainnet ---
 [env.production]
-name = "token-intel-api"
+name = "polymarket-liquidity-api"
 
 [env.production.vars]
 FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402"
 X402_NETWORK = "eip155:8453"
 
 [[env.production.kv_namespaces]]
-binding = "TOKEN_CACHE"
-id = "4b1304f9c29d43e7b1970852cd69c8eb"
+binding = "MARKET_CACHE"
+id = "placeholder-create-with-wrangler-kv-namespace-create"
 
 # Secrets (set via `wrangler secret put`):
 # PAY_TO_ADDRESS = "0x..."
-# GOPLUS_API_KEY = "..."
 #
 # Production-only (set via `wrangler secret put --env production`):
 # CDP_API_KEY_ID = "..."

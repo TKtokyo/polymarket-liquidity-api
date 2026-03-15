@@ -10,14 +10,25 @@ import { createFacilitatorConfig } from "@coinbase/x402";
 import type { RoutesConfig } from "@x402/core/server";
 import type { FacilitatorConfig } from "@x402/core/http";
 import type { Env } from "./types/index.js";
-import { tokenRoutes } from "./routes/token.js";
+import { marketRoutes } from "./routes/market.js";
 
 const app = new Hono<{ Bindings: Env }>();
 
-// Error handler for debugging
+// Security headers middleware (audit P0 #2)
+app.use("*", async (c, next) => {
+  await next();
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("Cache-Control", "no-store");
+  c.header("X-Frame-Options", "DENY");
+});
+
+// Error handler — generic message only (audit P0 #1)
 app.onError((err, c) => {
   console.error("Unhandled error:", err.message, err.stack);
-  return c.json({ error: "internal_error", message: err.message }, 500);
+  return c.json(
+    { error: "internal_error", message: "An unexpected error occurred." },
+    500,
+  );
 });
 
 // Health check (unprotected)
@@ -43,85 +54,89 @@ app.use("/api/v1/*", async (c, next) => {
   server.registerExtension(bazaarResourceServerExtension);
 
   const routes: RoutesConfig = {
-    "GET /api/v1/token/*/*": {
+    "GET /api/v1/market/*": {
       accepts: {
         scheme: "exact",
         network: c.env.X402_NETWORK as `eip155:${string}`,
         price: "$0.005",
         payTo: c.env.PAY_TO_ADDRESS as `0x${string}`,
       },
-      resource: "Token Intelligence Report",
+      resource: "Polymarket Orderbook Liquidity Report",
       description:
-        "Security analysis + risk score + summary for any EVM token",
+        "Orderbook depth, spread, slippage + liquidity rating for any Polymarket market",
       mimeType: "application/json",
       extensions: {
         ...declareDiscoveryExtension({
-          input: { chainId: "1", address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" },
+          input: {
+            conditionId:
+              "0x9c1a953fe92c8357f1b646ba25d983aa83e90c525992db14fb726fa895cb5763",
+          },
           inputSchema: {
             properties: {
-              chainId: {
+              conditionId: {
                 type: "string",
-                enum: ["1", "8453"],
-                description: "Chain ID (1 = Ethereum, 8453 = Base)",
-              },
-              address: {
-                type: "string",
-                pattern: "^0x[a-fA-F0-9]{40}$",
-                description: "ERC-20 token contract address",
+                pattern: "^0x[a-fA-F0-9]{64}$",
+                description:
+                  "Polymarket market condition ID (0x-prefixed 64-char hex string)",
               },
             },
-            required: ["chainId", "address"],
+            required: ["conditionId"],
           },
           output: {
             example: {
-              token: {
-                name: "USD Coin",
-                symbol: "USDC",
-                chain_id: "1",
-                address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
-                total_supply: "25000000000000000",
+              market: {
+                condition_id:
+                  "0x9c1a953fe92c8357f1b646ba25d983aa83e90c525992db14fb726fa895cb5763",
+                question: "Russia-Ukraine Ceasefire before GTA VI?",
+                outcomes: ["Yes", "No"],
+                token_ids: ["8501497...", "2527312..."],
+                end_date: "2026-07-31",
               },
-              security: {
-                is_honeypot: false,
-                is_open_source: true,
-                is_proxy: true,
-                is_mintable: false,
+              orderbook: {
+                best_bid: 0.55,
+                best_ask: 0.56,
+                midpoint: 0.555,
+                spread: 0.01,
+                tick_size: 0.01,
+                bid_levels: 51,
+                ask_levels: 29,
+                last_trade_price: 0.44,
               },
-              risk_score: 80,
-              risk_level: "LOW",
+              metrics: {
+                spread_score: 100,
+                depth_imbalance: 0.42,
+                fill_probability: {
+                  "1000": { bid: 1.0, ask: 1.0 },
+                },
+                slippage_estimate: {
+                  "1000": { bid: 0.0018, ask: 0.0045 },
+                },
+              },
+              liquidity_rating: "GOOD",
               summary:
-                "LOW risk. Contract is open source, verified. No honeypot detected.",
+                "GOOD liquidity. Tight spread (1 tick). Moderate bid-side bias.",
               cached: false,
               data_age_seconds: 0,
             },
             schema: {
               type: "object",
               properties: {
-                token: { type: "object" },
-                security: { type: "object" },
-                holders: { type: "object" },
-                liquidity: { type: "object" },
-                risk_score: {
-                  type: "number",
-                  minimum: 0,
-                  maximum: 100,
-                  description: "Risk score (0 = critical, 100 = safest)",
-                },
-                risk_level: {
+                market: { type: "object" },
+                orderbook: { type: "object" },
+                metrics: { type: "object" },
+                liquidity_rating: {
                   type: "string",
-                  enum: ["CRITICAL", "HIGH", "MODERATE", "LOW"],
+                  enum: ["EXCELLENT", "GOOD", "FAIR", "POOR", "DEAD"],
                 },
                 summary: { type: "string" },
                 cached: { type: "boolean" },
                 data_age_seconds: { type: "number" },
               },
               required: [
-                "token",
-                "security",
-                "holders",
-                "liquidity",
-                "risk_score",
-                "risk_level",
+                "market",
+                "orderbook",
+                "metrics",
+                "liquidity_rating",
                 "summary",
               ],
             },
@@ -136,6 +151,6 @@ app.use("/api/v1/*", async (c, next) => {
 });
 
 // Protected route
-app.route("/api/v1/token", tokenRoutes);
+app.route("/api/v1/market", marketRoutes);
 
 export default app;

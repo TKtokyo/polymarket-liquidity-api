@@ -1,21 +1,30 @@
-import type { TokenIntelResponse } from "../types/index.js";
+import type { MarketLiquidityResponse } from "../types/index.js";
 
-/** Positive cache TTL: 5 minutes */
-const CACHE_TTL_SECONDS = 300;
+/** Positive cache TTL: 60 seconds (orderbook data is volatile) */
+const CACHE_TTL_SECONDS = 60;
 
-/** Negative cache TTL: 30 seconds (GoPlus 429/5xx) */
-const NEGATIVE_CACHE_TTL_SECONDS = 30;
+/** Negative cache TTL: 15 seconds */
+const NEGATIVE_CACHE_TTL_SECONDS = 15;
 
-/** Cache key format: token:{chainId}:{normalizedAddress} */
-function cacheKey(chainId: string, address: string): string {
-  return `token:${chainId}:${address}`;
+/** Circuit breaker TTL: 15 seconds */
+const CIRCUIT_BREAKER_TTL_SECONDS = 15;
+
+/** Circuit breaker threshold: errors before tripping */
+const CIRCUIT_BREAKER_THRESHOLD = 3;
+
+/** Circuit breaker KV key */
+const CIRCUIT_KEY = "circuit:polymarket";
+
+/** Cache key format: market:{normalizedConditionId} */
+function cacheKey(conditionId: string): string {
+  return `market:${conditionId}`;
 }
 
 // --- Stored cache entry types ---
 
 interface PositiveCacheEntry {
   type: "ok";
-  data: TokenIntelResponse;
+  data: MarketLiquidityResponse;
   storedAt: number; // epoch ms
 }
 
@@ -26,6 +35,11 @@ interface NegativeCacheEntry {
 }
 
 type CacheEntry = PositiveCacheEntry | NegativeCacheEntry;
+
+interface CircuitBreakerState {
+  errorCount: number;
+  firstErrorAt: number;
+}
 
 // --- Public API ---
 
@@ -49,14 +63,19 @@ export type CacheResult = CacheHit | CacheNegativeHit | CacheMiss;
 
 /**
  * Read from KV cache.
- * Returns hit with data + age, negative hit, or miss.
+ * Checks circuit breaker first, then per-key cache. (audit P1 #7)
  */
 export async function cacheGet(
   kv: KVNamespace,
-  chainId: string,
-  address: string,
+  conditionId: string,
 ): Promise<CacheResult> {
-  const key = cacheKey(chainId, address);
+  // Check circuit breaker first
+  const circuitTripped = await isCircuitBreakerTripped(kv);
+  if (circuitTripped) {
+    return { hit: true, negative: true, reason: "circuit_breaker_open" };
+  }
+
+  const key = cacheKey(conditionId);
   const raw = await kv.get(key, "text");
 
   if (!raw) {
@@ -80,15 +99,14 @@ export async function cacheGet(
 }
 
 /**
- * Store a successful response in KV cache (TTL 5min).
+ * Store a successful response in KV cache (TTL 60s).
  */
 export async function cachePut(
   kv: KVNamespace,
-  chainId: string,
-  address: string,
-  data: TokenIntelResponse,
+  conditionId: string,
+  data: MarketLiquidityResponse,
 ): Promise<void> {
-  const key = cacheKey(chainId, address);
+  const key = cacheKey(conditionId);
   const entry: PositiveCacheEntry = {
     type: "ok",
     data,
@@ -101,16 +119,15 @@ export async function cachePut(
 }
 
 /**
- * Store a negative cache entry (TTL 30s).
- * Used when GoPlus returns 429/5xx to prevent hammering.
+ * Store a negative cache entry (TTL 15s).
+ * Prevents hammering upstream on repeated requests for same market.
  */
 export async function cacheNegativePut(
   kv: KVNamespace,
-  chainId: string,
-  address: string,
+  conditionId: string,
   reason: string,
 ): Promise<void> {
-  const key = cacheKey(chainId, address);
+  const key = cacheKey(conditionId);
   const entry: NegativeCacheEntry = {
     type: "upstream_degraded",
     reason,
@@ -120,4 +137,42 @@ export async function cacheNegativePut(
   await kv.put(key, JSON.stringify(entry), {
     expirationTtl: NEGATIVE_CACHE_TTL_SECONDS,
   });
+}
+
+/**
+ * Record an upstream error and potentially trip the circuit breaker. (audit P1 #7)
+ */
+export async function recordUpstreamError(kv: KVNamespace): Promise<void> {
+  const raw = await kv.get(CIRCUIT_KEY, "text");
+  let state: CircuitBreakerState;
+
+  if (raw) {
+    try {
+      state = JSON.parse(raw) as CircuitBreakerState;
+      state.errorCount++;
+    } catch {
+      state = { errorCount: 1, firstErrorAt: Date.now() };
+    }
+  } else {
+    state = { errorCount: 1, firstErrorAt: Date.now() };
+  }
+
+  await kv.put(CIRCUIT_KEY, JSON.stringify(state), {
+    expirationTtl: CIRCUIT_BREAKER_TTL_SECONDS,
+  });
+}
+
+/**
+ * Check if circuit breaker is tripped (3+ errors in 15s window).
+ */
+async function isCircuitBreakerTripped(kv: KVNamespace): Promise<boolean> {
+  const raw = await kv.get(CIRCUIT_KEY, "text");
+  if (!raw) return false;
+
+  try {
+    const state = JSON.parse(raw) as CircuitBreakerState;
+    return state.errorCount >= CIRCUIT_BREAKER_THRESHOLD;
+  } catch {
+    return false;
+  }
 }

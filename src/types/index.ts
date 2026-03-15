@@ -1,143 +1,111 @@
+import { z } from "zod";
+
+// --- Environment bindings ---
+
 export interface Env {
   FACILITATOR_URL: string;
   X402_NETWORK: string;
   PAY_TO_ADDRESS: string;
-  GOPLUS_API_KEY: string;
-  TOKEN_CACHE: KVNamespace;
-  // CDP keys for mainnet facilitator (optional, testnet needs no auth)
+  MARKET_CACHE: KVNamespace;
   CDP_API_KEY_ID?: string;
   CDP_API_KEY_SECRET?: string;
 }
 
-// --- GoPlus API types ---
+// --- Zod schemas for upstream API validation (audit P1 #5) ---
 
-/** Raw GoPlus token_security response fields (all strings) */
-export interface GoPlusTokenData {
-  token_name?: string;
-  token_symbol?: string;
-  total_supply?: string;
-  holder_count?: string;
-  creator_address?: string;
-  creator_percent?: string;
+export const GammaMarketSchema = z.object({
+  conditionId: z.string(),
+  question: z.string(),
+  outcomes: z.string(), // JSON-encoded: '["Yes","No"]'
+  clobTokenIds: z.string(), // JSON-encoded: '["123...","456..."]'
+  endDateIso: z.string().optional(),
+  active: z.boolean().optional(),
+  slug: z.string().optional(),
+});
 
-  // Security flags ("0" = false, "1" = true)
-  is_honeypot?: string;
-  is_open_source?: string;
-  is_proxy?: string;
-  is_mintable?: string;
-  hidden_owner?: string;
-  can_take_back_ownership?: string;
-  selfdestruct?: string;
-  external_call?: string;
-  is_blacklisted?: string;
-  is_whitelisted?: string;
-  is_anti_whale?: string;
-  owner_change_balance?: string;
-  trading_cooldown?: string;
+export const GammaResponseSchema = z.array(GammaMarketSchema);
 
-  // Tax
-  buy_tax?: string;
-  sell_tax?: string;
+export type GammaMarket = z.infer<typeof GammaMarketSchema>;
 
-  // DEX / Liquidity
-  is_in_dex?: string;
-  dex?: Array<{
-    name?: string;
-    liquidity?: string;
-    pair?: string;
-  }>;
-  lp_total_supply?: string;
-  lp_holder_count?: string;
+const OrderLevelSchema = z.object({
+  price: z.string(),
+  size: z.string(),
+});
 
-  // Holders
-  holders?: Array<{
-    address?: string;
-    balance?: string;
-    percent?: string;
-    is_locked?: number;
-    tag?: string;
-    is_contract?: number;
-  }>;
+export const CLOBBookSchema = z.object({
+  market: z.string(),
+  asset_id: z.string(),
+  timestamp: z.string(),
+  bids: z.array(OrderLevelSchema),
+  asks: z.array(OrderLevelSchema),
+  tick_size: z.string(),
+  min_order_size: z.string(),
+  neg_risk: z.boolean(),
+  last_trade_price: z.string(),
+});
 
-  // Other
-  trust_list?: string;
-}
+export type CLOBOrderbook = z.infer<typeof CLOBBookSchema>;
 
-export interface GoPlusResponse {
-  code: number;
-  message: string;
-  result: Record<string, GoPlusTokenData>;
-}
+// --- Fetch result discriminated union ---
 
-export type GoPlusFetchResult =
-  | { status: "ok"; data: GoPlusTokenData }
+export type PolymarketFetchResult =
+  | { status: "ok"; market: GammaMarket; books: CLOBOrderbook[] }
   | { status: "not_found" }
   | { status: "rate_limited"; retryAfter: number }
   | { status: "error"; httpStatus: number; message?: string };
 
-// --- Scoring types ---
+// --- Response types ---
 
-export interface ScoringResult {
-  score: number;
-  level: "CRITICAL" | "HIGH" | "MODERATE" | "LOW";
+export interface MarketInfo {
+  condition_id: string;
+  question: string;
+  outcomes: string[];
+  token_ids: string[];
+  end_date: string | null;
+}
+
+export interface OrderbookSummary {
+  best_bid: number;
+  best_ask: number;
+  midpoint: number;
+  spread: number;
+  tick_size: number;
+  bid_levels: number;
+  ask_levels: number;
+  last_trade_price: number;
+  timestamp: string;
+}
+
+export interface FillProbability {
+  bid: number;
+  ask: number;
+}
+
+export interface SlippageEstimate {
+  bid: number | null;
+  ask: number | null;
+}
+
+export interface LiquidityMetrics {
+  spread_score: number;
+  depth_imbalance: number;
+  fill_probability: Record<string, FillProbability>;
+  slippage_estimate: Record<string, SlippageEstimate>;
+}
+
+export type LiquidityRating = "EXCELLENT" | "GOOD" | "FAIR" | "POOR" | "DEAD";
+
+export interface LiquidityRatingResult {
+  rating: LiquidityRating;
+  metrics: LiquidityMetrics;
   factors: string[];
 }
 
-// --- API response types ---
-
-export interface TokenInfo {
-  name: string;
-  symbol: string;
-  chain_id: string;
-  address: string;
-  total_supply: string;
-}
-
-export interface SecurityInfo {
-  is_honeypot: boolean | null;
-  is_open_source: boolean | null;
-  is_proxy: boolean | null;
-  is_mintable: boolean | null;
-  can_take_back_ownership: boolean | null;
-  owner_change_balance: boolean | null;
-  hidden_owner: boolean | null;
-  selfdestruct: boolean | null;
-  external_call: boolean | null;
-  buy_tax: string | null;
-  sell_tax: string | null;
-  is_blacklisted: boolean | null;
-  is_whitelisted: boolean | null;
-  is_anti_whale: boolean | null;
-  trading_cooldown: boolean | null;
-}
-
-export interface HolderInfo {
-  holder_count: number;
-  top10_percentage: string | null;
-  creator_percentage: string;
-  lp_holder_count: number;
-}
-
-export interface DexInfo {
-  name: string;
-  liquidity: string;
-  pair: string;
-}
-
-export interface LiquidityInfo {
-  is_in_dex: boolean;
-  dex: DexInfo[];
-  lp_total_supply: string;
-  is_lp_locked: boolean;
-}
-
-export interface TokenIntelResponse {
-  token: TokenInfo;
-  security: SecurityInfo;
-  holders: HolderInfo;
-  liquidity: LiquidityInfo;
-  risk_score: number;
-  risk_level: string;
+export interface MarketLiquidityResponse {
+  market: MarketInfo;
+  orderbook: OrderbookSummary;
+  metrics: LiquidityMetrics;
+  liquidity_rating: LiquidityRating;
   summary: string;
   cached: boolean;
   data_age_seconds: number;

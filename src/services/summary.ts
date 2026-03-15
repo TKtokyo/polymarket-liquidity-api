@@ -1,96 +1,84 @@
-import type { GoPlusTokenData } from "../types/index.js";
+import type {
+  LiquidityRating,
+  LiquidityMetrics,
+  OrderbookSummary,
+} from "../types/index.js";
 
 /**
- * Template-based summary generation (no GPU/LLM needed).
- *
- * Builds a human-readable summary from risk factors and token data.
- * See design doc section 3.5.
+ * Generate a human-readable summary of market liquidity.
+ * Template-based, no LLM needed.
  */
 export function generateSummary(
-  score: number,
-  level: string,
+  rating: LiquidityRating,
+  metrics: LiquidityMetrics,
+  orderbook: OrderbookSummary,
   factors: string[],
-  data: GoPlusTokenData,
 ): string {
   const parts: string[] = [];
 
-  // Risk level
-  parts.push(`${level} risk.`);
+  // Rating header
+  parts.push(`${rating} liquidity.`);
 
-  // Contract status
-  if (data.is_open_source === "1") {
-    parts.push("Contract is open source, verified.");
-  } else if (data.is_open_source === "0") {
-    parts.push("Contract is NOT open source.");
-  }
-
-  if (data.is_honeypot === "1") {
-    parts.push("HONEYPOT DETECTED — do not trade.");
-  }
-
-  // Tax rates
-  const sellTax = parseFloat(data.sell_tax || "0") * 100;
-  const buyTax = parseFloat(data.buy_tax || "0") * 100;
-  if (sellTax > 0 || buyTax > 0) {
-    parts.push(`Tax: ${buyTax.toFixed(1)}% buy / ${sellTax.toFixed(1)}% sell.`);
-  }
-
-  // Holder concentration (from holders array)
-  if (data.holders && data.holders.length > 0) {
-    const top10 = data.holders.slice(0, 10);
-    const pct =
-      top10.reduce((sum, h) => sum + parseFloat(h.percent || "0"), 0) * 100;
-    if (pct > 50) {
-      parts.push(
-        `Top 10 holders control ${pct.toFixed(1)}% (HIGH concentration).`,
-      );
-    } else if (pct > 30) {
-      parts.push(
-        `Top 10 holders control ${pct.toFixed(1)}% (elevated concentration).`,
-      );
+  // Spread
+  const { spread, tick_size } = orderbook;
+  if (tick_size > 0 && spread > 0) {
+    const spreadTicks = Math.round(spread / tick_size);
+    if (metrics.spread_score >= 90) {
+      parts.push(`Tight spread (${spreadTicks} tick${spreadTicks > 1 ? "s" : ""}).`);
+    } else if (metrics.spread_score >= 50) {
+      parts.push(`Moderate spread (${spreadTicks} ticks).`);
     } else {
-      parts.push(`Top 10 holders control ${pct.toFixed(1)}%.`);
+      parts.push(`Wide spread (${spreadTicks} ticks) — high cost to cross.`);
+    }
+  } else if (orderbook.bid_levels === 0 || orderbook.ask_levels === 0) {
+    parts.push("One-sided book — no spread available.");
+  }
+
+  // Depth imbalance
+  const imb = metrics.depth_imbalance;
+  if (Math.abs(imb) > 0.5) {
+    const side = imb > 0 ? "bid" : "ask";
+    parts.push(
+      `Strong ${side}-side imbalance (${(Math.abs(imb) * 100).toFixed(0)}%).`,
+    );
+  } else if (Math.abs(imb) > 0.2) {
+    const side = imb > 0 ? "bid" : "ask";
+    parts.push(`Moderate ${side}-side bias.`);
+  } else {
+    parts.push("Balanced order book.");
+  }
+
+  // Fill probability at $1K
+  const fill1k = metrics.fill_probability["1000"];
+  if (fill1k) {
+    if (fill1k.bid >= 0.9 && fill1k.ask >= 0.9) {
+      parts.push("Deep liquidity at $1K.");
+    } else if (fill1k.bid < 0.5 || fill1k.ask < 0.5) {
+      parts.push("Thin liquidity — $1K orders may partially fill.");
     }
   }
 
-  // Liquidity
-  if (data.dex && data.dex.length > 0) {
-    // Find highest-liquidity DEX
-    let maxLiq = 0;
-    let maxDexName = "";
-    for (const d of data.dex) {
-      const liq = parseFloat(d.liquidity || "0");
-      if (liq > maxLiq) {
-        maxLiq = liq;
-        maxDexName = d.name || "Unknown DEX";
-      }
-    }
-    if (maxLiq > 0) {
+  // Slippage warning at $1K
+  const slip1k = metrics.slippage_estimate["1000"];
+  if (slip1k) {
+    const maxSlip = Math.max(slip1k.bid ?? 0, slip1k.ask ?? 0);
+    if (maxSlip > 0.05) {
       parts.push(
-        `$${formatLiquidity(maxLiq)} in ${maxDexName} pool.`,
+        `Significant slippage risk at $1K+ size (${(maxSlip * 100).toFixed(1)}%).`,
       );
     }
   }
 
-  // Severe risk factors
-  const severeFactors = factors.filter(
+  // Append any additional factors from scoring
+  const extraFactors = factors.filter(
     (f) =>
-      f.includes("Mintable") ||
-      f.includes("Hidden") ||
-      f.includes("Self-destruct") ||
-      f.includes("reclaimable"),
+      !f.includes("spread") &&
+      !f.includes("imbalance") &&
+      !f.includes("Extremely"),
   );
-  if (severeFactors.length > 0) {
-    parts.push(`Severe risks: ${severeFactors.join(", ")}.`);
+  if (extraFactors.length > 0) {
+    parts.push(extraFactors.join(" "));
   }
 
   return parts.join(" ");
-}
-
-/** Format liquidity number for display (e.g. 240000 → "240K") */
-function formatLiquidity(value: number): string {
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(0)}K`;
-  return value.toFixed(0);
 }
