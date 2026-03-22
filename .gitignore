@@ -1,5 +1,7 @@
 node_modules/
 .dev.vars
+.env
+*.pem
 .wrangler/
 dist/
 *.log

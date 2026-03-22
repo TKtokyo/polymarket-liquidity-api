@@ -11,6 +11,8 @@ import type { RoutesConfig } from "@x402/core/server";
 import type { FacilitatorConfig } from "@x402/core/http";
 import type { Env } from "./types/index.js";
 import { marketRoutes } from "./routes/market.js";
+import { handleMcpRequest } from "./mcp/server.js";
+import { OPENAPI_SPEC } from "./openapi.js";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -32,7 +34,114 @@ app.onError((err, c) => {
 });
 
 // Health check (unprotected)
-app.get("/health", (c) => c.json({ status: "ok", version: "0.1.0" }));
+app.get("/health", (c) => c.json({ status: "ok", version: "1.0.0" }));
+
+// API info
+app.get("/", (c) =>
+  c.json({
+    name: "Polymarket Liquidity API",
+    version: "1.0.0",
+    description:
+      "Real-time Polymarket prediction market liquidity data via x402 micropayments",
+    endpoint: "/api/v1/market/{conditionId}",
+    method: "GET",
+    price: "$0.005 USDC on Base",
+    example:
+      "/api/v1/market/0x9c1a953fe92c8357f1b646ba25d983aa83e90c525992db14fb726fa895cb5763",
+    x402: true,
+    mcp: {
+      endpoint: "/mcp",
+      transport: "streamable-http",
+      tools: ["get_market_liquidity"],
+    },
+  }),
+);
+
+// MCP server endpoint (discovery-only — no data, no upstream calls)
+app.all("/mcp", async (c) => {
+  return handleMcpRequest(c.req.raw);
+});
+
+// OpenAPI spec (no paywall — free discovery)
+app.get("/openapi.json", (c) => {
+  return c.json(OPENAPI_SPEC, 200, {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+  });
+});
+
+// llms.txt (no paywall — free discovery)
+app.get("/llms.txt", (c) => {
+  return c.text(
+    `# Polymarket Liquidity API
+
+> Real-time order book depth, spread analysis, and market efficiency scoring for Polymarket prediction markets.
+
+## When to use this API
+Use this API when you need to analyze liquidity before placing a trade on Polymarket.
+- Before entering a position, check order book depth and spread
+- To assess market efficiency and slippage risk
+- To get structured liquidity data for trading decisions
+
+## Endpoint
+### GET /api/v1/market/{conditionId}
+**Paywall**: x402 — $0.005 USDC on Base mainnet.
+
+**Response fields**:
+- spread: Bid-ask spread (lower is better)
+- efficiency_score: 0-1 (higher means tighter, more efficient market)
+- liquidity_usd: Total available liquidity in USD
+- bids/asks: Full order book depth
+
+## Machine-readable API spec
+- OpenAPI 3.0: https://polymarket-liquidity-api.tatsu77.workers.dev/openapi.json
+
+## Discovery
+- x402 metadata: https://polymarket-liquidity-api.tatsu77.workers.dev/.well-known/x402
+- llms.txt: https://polymarket-liquidity-api.tatsu77.workers.dev/llms.txt
+
+## Related APIs
+- Polymarket Scan API: https://polymarket-scan-api.tatsu77.workers.dev (full market scanner)
+`,
+    200,
+    {
+      "Content-Type": "text/plain",
+      "Access-Control-Allow-Origin": "*",
+    },
+  );
+});
+
+// .well-known/x402 (no paywall — free discovery)
+app.get("/.well-known/x402", (c) => {
+  return c.json(
+    {
+      name: "Polymarket Liquidity API",
+      version: "1.0.0",
+      description:
+        "Real-time order book depth and liquidity analysis for Polymarket markets",
+      endpoints: [
+        {
+          path: "/api/v1/market/{conditionId}",
+          price_usdc: 0.005,
+          chain: "base",
+          description:
+            "Order book depth, spread, and efficiency score for any Polymarket market",
+        },
+      ],
+      openapi:
+        "https://polymarket-liquidity-api.tatsu77.workers.dev/openapi.json",
+      llms_txt:
+        "https://polymarket-liquidity-api.tatsu77.workers.dev/llms.txt",
+      facilitator:
+        "https://api.cdp.coinbase.com/platform/v1/x402/facilitate",
+    },
+    200,
+    {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+    },
+  );
+});
 
 // x402 payment middleware — wraps protected routes
 app.use("/api/v1/*", async (c, next) => {

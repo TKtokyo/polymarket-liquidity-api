@@ -11,7 +11,7 @@ X402_NETWORK = "eip155:84532"
 # KV namespace for market liquidity cache (local dev uses simulated KV)
 [[kv_namespaces]]
 binding = "MARKET_CACHE"
-id = "placeholder-create-with-wrangler-kv-namespace-create"
+id = "108d5804eb2849149d30150c8bf7b5fd"
 
 # --- Production environment: Base mainnet ---
 [env.production]
@@ -23,7 +23,7 @@ X402_NETWORK = "eip155:8453"
 
 [[env.production.kv_namespaces]]
 binding = "MARKET_CACHE"
-id = "placeholder-create-with-wrangler-kv-namespace-create"
+id = "1d71dfbe80364890ab41c9dea982f821"
 
 # Secrets (set via `wrangler secret put`):
 # PAY_TO_ADDRESS = "0x..."
