@@ -1,71 +1,68 @@
-# Token Intelligence API
+# Polymarket Liquidity API
 
-x402-powered paid API that returns security analysis, deterministic risk scores, and natural language summaries for any EVM token.
+x402-powered paid API that returns real-time order book depth, spread analysis, and market efficiency scoring for any Polymarket prediction market.
 
-**Live (testnet):** `https://token-intel-api.tatsu77.workers.dev`
+**Live:** `https://polymarket-liquidity-api.tatsu77.workers.dev`
 
 ## How It Works
 
 ```
-Client → GET /api/v1/token/{chainId}/{address}
+Client → GET /api/v1/market/{conditionId}
        ← 402 Payment Required (USDC via x402)
        → Payment header + retry
-       ← 200 { token, security, risk_score, summary, ... }
+       ← 200 { market, orderbook, metrics, liquidity_rating, summary }
 ```
 
 One HTTP request, one microtransaction ($0.005 USDC), one structured response.
 
 ## API
 
-### `GET /api/v1/token/{chainId}/{address}`
+### `GET /api/v1/market/{conditionId}`
 
-**Payment:** $0.005 USDC via x402 protocol (Base Sepolia testnet)
+**Payment:** $0.005 USDC via x402 protocol (Base)
 
 **Path parameters:**
 | Parameter | Description |
 |---|---|
-| `chainId` | `1` (Ethereum) or `8453` (Base) |
-| `address` | ERC-20 token contract address |
+| `conditionId` | Polymarket condition ID (`0x`-prefixed 64-char hex string) |
 
 **Response (200):**
 
 ```json
 {
-  "token": {
-    "name": "Pepe",
-    "symbol": "PEPE",
-    "chain_id": "1",
-    "address": "0x6982508145454ce325ddbe47a25d4ec3d2311933",
-    "total_supply": "420690000000000000000000000000000"
+  "market": {
+    "condition_id": "0x9c1a953fe92c8357f1b646ba25d983aa83e90c525992db14fb726fa895cb5763",
+    "question": "Russia-Ukraine Ceasefire before GTA VI?",
+    "outcomes": ["Yes", "No"],
+    "token_ids": ["8501497...", "2527312..."],
+    "end_date": "2026-07-31"
   },
-  "security": {
-    "is_honeypot": false,
-    "is_open_source": true,
-    "is_proxy": false,
-    "is_mintable": false,
-    "hidden_owner": false,
-    "selfdestruct": false,
-    "external_call": false,
-    "buy_tax": "0",
-    "sell_tax": "0"
+  "orderbook": {
+    "best_bid": 0.55,
+    "best_ask": 0.56,
+    "midpoint": 0.555,
+    "spread": 0.01,
+    "tick_size": 0.01,
+    "bid_levels": 51,
+    "ask_levels": 29,
+    "last_trade_price": 0.44
   },
-  "holders": {
-    "holder_count": 320000,
-    "top10_percentage": "0.0",
-    "creator_percentage": "0.0",
-    "lp_holder_count": 500
+  "metrics": {
+    "spread_score": 100,
+    "depth_imbalance": 0.42,
+    "fill_probability": {
+      "100":   { "bid": 1.0,  "ask": 1.0  },
+      "1000":  { "bid": 1.0,  "ask": 1.0  },
+      "10000": { "bid": 0.85, "ask": 0.62 }
+    },
+    "slippage_estimate": {
+      "100":   { "bid": 0.0000, "ask": 0.0000 },
+      "1000":  { "bid": 0.0018, "ask": 0.0045 },
+      "10000": { "bid": 0.0120, "ask": 0.0310 }
+    }
   },
-  "liquidity": {
-    "is_in_dex": true,
-    "dex": [
-      { "name": "UniswapV2", "liquidity": "13000000", "pair": "0x..." }
-    ],
-    "lp_total_supply": "...",
-    "is_lp_locked": false
-  },
-  "risk_score": 85,
-  "risk_level": "LOW",
-  "summary": "LOW risk. Contract is open source, verified. Top 10 holders control 0.0%. $13.0M in UniswapV2 pool.",
+  "liquidity_rating": "GOOD",
+  "summary": "GOOD liquidity. Tight spread (1 tick). Moderate bid-side bias.",
   "cached": false,
   "data_age_seconds": 0
 }
@@ -75,29 +72,58 @@ One HTTP request, one microtransaction ($0.005 USDC), one structured response.
 
 | Status | Error | Description |
 |---|---|---|
-| 400 | `invalid_address` | Invalid contract address format |
+| 400 | `invalid_condition_id` | Condition ID format invalid |
 | 402 | Payment Required | x402 payment needed |
-| 404 | `token_not_found` | No data for this token |
-| 429 | `upstream_throttled` | GoPlus rate limited (retry in 30s) |
-| 503 | `upstream_unavailable` | GoPlus API down |
+| 404 | `market_not_found` | No market for this condition ID |
+| 429 | `upstream_throttled` | Polymarket rate limited (retry in 15s) |
+| 503 | `upstream_error` | Upstream API unavailable |
 
 ### `GET /health`
 
-Returns `{ "status": "ok", "version": "0.1.0" }`. No payment required.
+Returns `{ "status": "ok", "version": "1.0.0" }`. No payment required.
 
-## Risk Scoring
+### `GET /openapi.json`
 
-Deterministic 100-point scale:
+OpenAPI 3.0 specification. No payment required.
 
-| Severity | Deduction | Flags |
-|---|---|---|
-| CRITICAL | Score = 0 | Honeypot |
-| SEVERE | -30 each | Mintable, hidden owner, ownership reclaimable, self-destruct |
-| HIGH | -20 each | Tax > 10%, proxy contract |
-| MODERATE | -10 each | Not open source, external calls, blacklist function |
-| LOW | -5 each | Holder count < 100 |
+https://polymarket-liquidity-api.tatsu77.workers.dev/openapi.json
 
-Risk levels: **CRITICAL** (0-25) / **HIGH** (26-50) / **MODERATE** (51-75) / **LOW** (76-100)
+## Scoring Logic
+
+### Composite Rating
+
+The `liquidity_rating` is a composite of three metrics:
+
+```
+composite = spread_score × 0.5 + balance_score × 0.3 + fill_score × 0.2
+```
+
+| Rating | Composite Score |
+|---|---|
+| **EXCELLENT** | 85+ |
+| **GOOD** | 65-84 |
+| **FAIR** | 40-64 |
+| **POOR** | 15-39 |
+| **DEAD** | 0-14 |
+
+### Metrics
+
+**spread_score** (0-100): Based on bid-ask spread in tick units.
+
+| Spread (ticks) | Score |
+|---|---|
+| 1 | 100 |
+| 2 | 90 |
+| 3-5 | 70 |
+| 6-10 | 50 |
+| 11-20 | 25 |
+| 20+ | `max(0, 100 - ticks × 5)` |
+
+**depth_imbalance** (-1 to +1): Dollar-weighted bid vs ask depth. `(bidDepth - askDepth) / total`. Positive = bid-heavy, negative = ask-heavy.
+
+**fill_probability**: Fraction of $100 / $1,000 / $10,000 order fillable from current depth (0.0 to 1.0 per side).
+
+**slippage_estimate**: VWAP-based slippage vs midpoint for each tier. `null` if less than 50% fillable.
 
 ## Quick Start (Client)
 
@@ -108,10 +134,10 @@ import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { toClientEvmSigner } from "@x402/evm";
 import { privateKeyToAccount } from "viem/accounts";
 import { createPublicClient, http } from "viem";
-import { baseSepolia } from "viem/chains";
+import { base } from "viem/chains";
 
 const account = privateKeyToAccount("0xYOUR_PRIVATE_KEY");
-const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
+const publicClient = createPublicClient({ chain: base, transport: http() });
 const signer = toClientEvmSigner(account, publicClient);
 
 const client = new x402Client();
@@ -119,13 +145,13 @@ registerExactEvmScheme(client, { signer });
 const fetchWithPay = wrapFetchWithPayment(fetch, client);
 
 const res = await fetchWithPay(
-  "https://token-intel-api.tatsu77.workers.dev/api/v1/token/1/0x6982508145454Ce325dDbE47a25d4ec3d2311933"
+  "https://polymarket-liquidity-api.tatsu77.workers.dev/api/v1/market/0x9c1a953fe92c8357f1b646ba25d983aa83e90c525992db14fb726fa895cb5763"
 );
 const data = await res.json();
-console.log(data.risk_score, data.risk_level, data.summary);
+console.log(data.liquidity_rating, data.summary);
 ```
 
-**Prerequisites:** Test USDC on Base Sepolia from [Circle Faucet](https://faucet.circle.com).
+**Prerequisites:** USDC on Base from [Circle Faucet](https://faucet.circle.com) (testnet) or any exchange (mainnet).
 
 ## Development
 
@@ -136,9 +162,6 @@ npm install
 # Local dev (uses .dev.vars for secrets)
 npm run dev
 
-# Run E2E tests
-PRIVATE_KEY=0x... npx tsx test/client.ts
-
 # Deploy (testnet)
 npx wrangler deploy
 
@@ -148,12 +171,13 @@ npx wrangler deploy --env production
 
 ### Environment Variables
 
-| Variable | Where | Description |
+Set via `wrangler secret put`:
+
+| Variable | Required | Description |
 |---|---|---|
-| `PAY_TO_ADDRESS` | Wrangler secret | EOA address to receive USDC |
-| `GOPLUS_API_KEY` | Wrangler secret | GoPlus API key |
-| `CDP_API_KEY_ID` | Wrangler secret (production) | Coinbase Developer Platform key ID |
-| `CDP_API_KEY_SECRET` | Wrangler secret (production) | CDP key secret |
+| `PAY_TO_ADDRESS` | Yes | EOA address to receive USDC payments |
+| `CDP_API_KEY_ID` | Production | Coinbase Developer Platform key ID |
+| `CDP_API_KEY_SECRET` | Production | CDP key secret (for mainnet facilitator) |
 
 ## Architecture
 
@@ -162,18 +186,18 @@ Cloudflare Workers (Hono)
   ├── x402 Payment Middleware (@x402/hono)
   ├── Bazaar Discovery Extension (@x402/extensions/bazaar)
   ├── Cache Layer (Cloudflare KV, 5min TTL)
-  ├── GoPlus Security API (upstream data)
-  ├── Deterministic Risk Scoring (rule-based)
-  └── Template Summary Generator (GPU-free)
+  ├── Polymarket CLOB API (upstream data)
+  ├── Deterministic Liquidity Scoring (rule-based)
+  ├── MCP Server (tool discovery)
+  └── OpenAPI 3.0 Spec
 ```
 
-## Tech Stack
+## Discovery
 
-- **Runtime:** Cloudflare Workers
-- **Framework:** Hono
-- **Payment:** x402 protocol (USDC on Base)
-- **Data:** GoPlus Security API
-- **Cache:** Cloudflare KV
+- **OpenAPI:** https://polymarket-liquidity-api.tatsu77.workers.dev/openapi.json
+- **llms.txt:** https://polymarket-liquidity-api.tatsu77.workers.dev/llms.txt
+- **x402 metadata:** https://polymarket-liquidity-api.tatsu77.workers.dev/.well-known/x402
+- **MCP endpoint:** `POST /mcp` (Streamable HTTP transport)
 
 ## License
 
