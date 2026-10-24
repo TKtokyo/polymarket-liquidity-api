@@ -1,8 +1,10 @@
 # Polymarket Liquidity API
 
+> **Discontinued (October 2026).** This service has been shut down and its hosted endpoint is no longer available. The repository is archived and kept for reference only; it is not maintained.
+
 x402-powered paid API that returns real-time order book depth, spread analysis, and market efficiency scoring for any Polymarket prediction market.
 
-**Live:** `https://polymarket-liquidity-api.tatsu77.workers.dev`
+**Former endpoint (offline):** `https://polymarket-liquidity-api.tatsu77.workers.dev`
 
 ## How It Works
 
